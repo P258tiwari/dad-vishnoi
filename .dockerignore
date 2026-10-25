@@ -1,0 +1,13 @@
+node_modules
+.next
+.git
+.env*
+.tmp
+.npm-cache
+.vscode
+.idea
+*.zip
+*.log
+*.tsbuildinfo
+deploy
+tests
