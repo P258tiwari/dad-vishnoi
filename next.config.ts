@@ -38,6 +38,9 @@ const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
   reactStrictMode: true,
+  experimental: {
+    agentUpgrade: "security",
+  },
   async headers() {
     return [
       { source: "/(.*)", headers: securityHeaders },
