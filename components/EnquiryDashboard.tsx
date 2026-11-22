@@ -14,6 +14,10 @@ const statusClasses: Record<EnquiryStatus, string> = {
   Closed: "border-red-200 bg-red-50 text-red-700",
 };
 
+function formatPayment(enquiry: DashboardEnquiry) {
+  return enquiry.amountPaid ? `Paid · ₹${enquiry.amountPaid.toLocaleString("en-IN")}` : "Paid";
+}
+
 function formatDate(value: string) {
   if (!value) return "—";
   return new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" }).format(new Date(value));
@@ -160,6 +164,7 @@ export function EnquiryDashboard({ initialEnquiries, loadError }: { initialEnqui
                 <th className="px-5 py-3.5">Contact</th>
                 <th className="px-5 py-3.5">Location</th>
                 <th className="px-5 py-3.5">Submitted</th>
+                <th className="px-5 py-3.5">Payment</th>
                 <th className="px-5 py-3.5">Files</th>
                 <th className="px-5 py-3.5">Status</th>
                 <th className="px-5 py-3.5"><span className="sr-only">View</span></th>
@@ -173,6 +178,7 @@ export function EnquiryDashboard({ initialEnquiries, loadError }: { initialEnqui
                   <td className="px-5 py-4"><a className="text-sm font-bold text-[#7164b1] hover:underline" href={`tel:${enquiry.phone}`}>{enquiry.phone}</a></td>
                   <td className="px-5 py-4"><b className="block text-sm text-[#292057]">{enquiry.city || "—"}</b><span className="mt-1 block text-xs text-[#8a8393]">{[enquiry.state, enquiry.pincode].filter(Boolean).join(" · ")}</span></td>
                   <td className="px-5 py-4 text-xs font-semibold text-[#6f6878]">{formatDate(enquiry.submittedAt)}</td>
+                  <td className="px-5 py-4"><span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-extrabold text-emerald-700"><CheckCircle2 size={13} aria-hidden="true" /> {formatPayment(enquiry)}</span></td>
                   <td className="px-5 py-4"><span className="inline-flex items-center gap-1.5 text-sm font-bold text-[#655a8f]"><Paperclip size={15} /> {enquiry.attachmentCount}</span></td>
                   <td className="px-5 py-4">
                     <span className={`inline-flex rounded-full border px-3 py-1.5 text-xs font-extrabold ${statusClasses[enquiry.status]}`}>
@@ -239,6 +245,8 @@ export function EnquiryDashboard({ initialEnquiries, loadError }: { initialEnqui
                 <DetailCard icon={<Phone size={17} />} label="WhatsApp" value={selected.whatsapp} />
                 <DetailCard icon={<MapPin size={17} />} label="Address" value={[selected.address, selected.landmark, selected.pincode && !selected.address.includes(selected.pincode) ? selected.pincode : ""].filter(Boolean).join(" · ")} wide />
                 <DetailCard icon={<CalendarClock size={17} />} label="Submitted" value={formatDate(selected.submittedAt)} />
+                <DetailCard icon={<CheckCircle2 size={17} />} label="Payment" value={formatPayment(selected)} />
+                <DetailCard icon={<CheckCircle2 size={17} />} label="Razorpay payment ID" value={[selected.paymentId, selected.orderId && `Order ${selected.orderId}`].filter(Boolean).join(" · ")} />
                 <DetailCard icon={<MapPin size={17} />} label="City / State" value={[selected.city, selected.state, selected.country].filter(Boolean).join(", ")} />
                 <DetailCard icon={<MapPin size={17} />} label="Pincode" value={selected.pincode} />
                 <DetailCard icon={<MapPin size={17} />} label="Address source" value={({ manual: "Entered manually", current_location: "Current location", google_search: "Address search" } as Record<string, string>)[selected.addressSource] || selected.addressSource} />

@@ -1,5 +1,5 @@
 import "server-only";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import type { DentalLead, LeadInput } from "./lead-schema";
 import { normalizeIndianPhone } from "./lead-schema";
 import { siteConfig } from "./site";
@@ -24,7 +24,7 @@ function indiaDateParts(now = new Date()) {
   return { date, time, compactDate: date.replaceAll("-", "") };
 }
 
-export function createLead(input: LeadInput): DentalLead {
+export function createLead(input: LeadInput, payment: DentalLead["payment"]): DentalLead {
   const now = new Date();
   const { date, time, compactDate } = indiaDateParts(now);
   const suffix = randomBytes(3).toString("hex").toUpperCase();
@@ -61,11 +61,6 @@ export function createLead(input: LeadInput): DentalLead {
     source: "Website - Dentist At Door",
     pageUrl: input.pageUrl || siteConfig.url,
     status: "Active",
+    payment,
   };
-}
-
-export function submissionFingerprint(ip: string, input: LeadInput) {
-  return createHash("sha256")
-    .update(`${ip}:${normalizeIndianPhone(input.phone)}:${input.address.toLowerCase()}`)
-    .digest("hex");
 }

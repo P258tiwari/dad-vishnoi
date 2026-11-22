@@ -1,22 +1,28 @@
-import { hasConsultationAccess } from "@/lib/consultation-access";
 import { hasBotSession } from "@/lib/bot-protection";
 import { boundedRequest } from "@/lib/bounded-request";
 import { NextRequest, NextResponse } from "next/server";
-import { leadInputSchema, normalizeIndianPhone } from "@/lib/lead-schema";
+import { z } from "zod";
+import { leadInputSchema } from "@/lib/lead-schema";
 import { isSupportedUpload } from "@/lib/upload-validation";
-import { createHash } from "node:crypto";
-import { createLead, submissionFingerprint } from "@/lib/lead-service";
+import { createLead } from "@/lib/lead-service";
 import { saveLeadToNotion } from "@/lib/notion-leads";
+import { verifyConsultationPayment } from "@/lib/razorpay";
 import { checkRateLimit, isDuplicate, releaseDuplicate } from "@/lib/rate-limit";
 import { isTrustedMutation } from "@/lib/request-security";
 
 export const runtime = "nodejs";
 
 const safeError = "We couldn't submit your request right now. Please try again.";
+const paidSaveError = "Your payment is received, but we couldn't send your details. Please try again. You won't be charged again.";
 const MAX_REQUEST_BYTES = 32 * 1024 * 1024;
 
+const paymentSchema = z.object({
+  orderId: z.string().regex(/^order_[A-Za-z0-9]{6,40}$/),
+  paymentId: z.string().regex(/^pay_[A-Za-z0-9]{6,40}$/),
+  signature: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
 export async function POST(request: NextRequest) {
-  if (!(await hasConsultationAccess(request))) return NextResponse.json({ ok: false, message: "Please return from the payment page to open the details form." }, { status: 402 });
   if (!hasBotSession(request)) return NextResponse.json({ ok: false, message: "Please complete the security check and try again." }, { status: 403 });
   if (!isTrustedMutation(request)) {
     return NextResponse.json({ ok: false, message: safeError }, { status: 403 });
@@ -76,30 +82,39 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (parsed.data.website || Date.now() - parsed.data.startedAt < 1500) {
-    return NextResponse.json({ ok: true });
+  const paymentInput = paymentSchema.safeParse((body as { payment?: unknown }).payment);
+  if (!paymentInput.success) {
+    return NextResponse.json({ ok: false, message: "Please complete the ₹1,500 payment before sending your Ping." }, { status: 402 });
   }
 
-  const fingerprint = submissionFingerprint(ip, parsed.data);
-  if (isDuplicate(fingerprint)) {
-    return NextResponse.json({ ok: true, duplicate: true });
-  }
-  const phoneKey = createHash("sha256").update(normalizeIndianPhone(parsed.data.phone)!).digest("hex");
-  if (!checkRateLimit(`lead-phone:${phoneKey}`, 3, 60 * 60_000)) {
-    releaseDuplicate(fingerprint);
-    return NextResponse.json({ ok: false, message: "You have already sent several enquiries. Please wait before sending another." }, { status: 429 });
+  // One Ping per payment. The Notion lookup in saveLeadToNotion covers retries after this lock expires.
+  const lockKey = `payment:${paymentInput.data.paymentId}`;
+  if (isDuplicate(lockKey)) {
+    return NextResponse.json({ ok: false, message: "Your Ping is already being sent. Please wait a moment." }, { status: 409 });
   }
 
-  const lead = createLead(parsed.data);
-  lead.summaryEnglish = "PAYMENT UNVERIFIED - Check the INR 1,500 Razorpay receipt manually before arranging consultation.\n\n" + (lead.summaryEnglish || "");
+  let payment;
   try {
-    await saveLeadToNotion(lead, attachments);
-    console.info(`[Dentist At Door] Notion enquiry saved: ${lead.leadId}`);
+    payment = await verifyConsultationPayment(paymentInput.data);
   } catch (error) {
-    releaseDuplicate(fingerprint);
-    console.error(`[Dentist At Door] Notion save failed: ${lead.leadId}`, error);
-    return NextResponse.json({ ok: false, message: safeError }, { status: 503 });
+    releaseDuplicate(lockKey);
+    console.error("[Dentist At Door] Razorpay verification failed", error);
+    return NextResponse.json({ ok: false, message: "We couldn't confirm your payment right now. Please try again. You won't be charged again." }, { status: 503 });
+  }
+  if (!payment) {
+    releaseDuplicate(lockKey);
+    return NextResponse.json({ ok: false, message: "We couldn't confirm this payment. If money was deducted, please call +91 99974 44678." }, { status: 402 });
   }
 
-  return NextResponse.json({ ok: true, leadId: lead.leadId }, { status: 201 });
+  // ponytail: no honeypot or per-phone limit here; a verified paid Ping must never be silently dropped.
+  const lead = createLead(parsed.data, payment);
+  try {
+    const saved = await saveLeadToNotion(lead, attachments);
+    console.info(`[Dentist At Door] Paid Notion enquiry saved: ${saved.leadId}`);
+    return NextResponse.json({ ok: true, leadId: saved.leadId, duplicate: saved.duplicate }, { status: saved.duplicate ? 200 : 201 });
+  } catch (error) {
+    releaseDuplicate(lockKey);
+    console.error(`[Dentist At Door] Notion save failed for paid ${payment.paymentId}: ${lead.leadId}`, error);
+    return NextResponse.json({ ok: false, message: paidSaveError }, { status: 503 });
+  }
 }

@@ -95,9 +95,39 @@ async function uploadFile(file: File) {
   return { id: created.id, name: file.name };
 }
 
-export async function saveLeadToNotion(lead: DentalLead, files: File[]) {
+const paymentProperties = {
+  "Payment Status": { select: { options: [{ name: "Paid", color: "green" }] } },
+  "Payment ID": { rich_text: {} },
+  "Order ID": { rich_text: {} },
+  "Amount Paid": { number: { format: "rupee" } },
+};
+
+// Adds the payment columns on first use so a paid Ping is never stored without its payment details.
+async function paymentReadySchema() {
   const { dataSourceId } = getConfig();
   const schema = await notionRequest<{ properties: Record<string, unknown> }>(`/data_sources/${dataSourceId}`);
+  const missing = Object.entries(paymentProperties).filter(([name]) => !(name in schema.properties));
+  if (!missing.length) return schema;
+  return notionRequest<{ properties: Record<string, unknown> }>(`/data_sources/${dataSourceId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ properties: Object.fromEntries(missing) }),
+  });
+}
+
+async function findLeadIdByPaymentId(paymentId: string) {
+  const { dataSourceId } = getConfig();
+  const result = await notionRequest<{ results: NotionPage[] }>(`/data_sources/${dataSourceId}/query`, {
+    method: "POST",
+    body: JSON.stringify({ page_size: 1, filter: { property: "Payment ID", rich_text: { equals: paymentId } } }),
+  });
+  return result.results[0] ? propertyText(result.results[0].properties["Lead ID"]) : "";
+}
+
+export async function saveLeadToNotion(lead: DentalLead, files: File[]) {
+  const { dataSourceId } = getConfig();
+  const schema = await paymentReadySchema();
+  const existingLeadId = await findLeadIdByPaymentId(lead.payment.paymentId);
+  if (existingLeadId) return { leadId: existingLeadId, duplicate: true };
   const uploads = new Array<{ id: string; name: string }>(files.length);
   let nextFileIndex = 0;
   const uploadWorker = async () => {
@@ -108,7 +138,7 @@ export async function saveLeadToNotion(lead: DentalLead, files: File[]) {
   };
   await Promise.all(Array.from({ length: Math.min(2, files.length) }, uploadWorker));
 
-  return notionRequest<{ id: string; url: string }>("/pages", {
+  await notionRequest<{ id: string; url: string }>("/pages", {
     method: "POST",
     body: JSON.stringify({
       parent: { type: "data_source_id", data_source_id: dataSourceId },
@@ -148,9 +178,14 @@ export async function saveLeadToNotion(lead: DentalLead, files: File[]) {
         Source: { type: "select", select: { name: lead.source } },
         "Page URL": { type: "url", url: lead.pageUrl.startsWith("http") ? lead.pageUrl : null },
         "Submitted At": { type: "date", date: { start: lead.createdAt } },
+        "Payment Status": { type: "select", select: { name: "Paid" } },
+        "Payment ID": { type: "rich_text", rich_text: richText(lead.payment.paymentId) },
+        "Order ID": { type: "rich_text", rich_text: richText(lead.payment.orderId) },
+        "Amount Paid": { type: "number", number: lead.payment.amountPaise / 100 },
       }).filter(([name]) => name in schema.properties)),
     }),
   });
+  return { leadId: lead.leadId, duplicate: false };
 }
 
 function propertyText(property?: NotionProperty) {
@@ -198,6 +233,10 @@ function parsePage(page: NotionPage): DashboardEnquiry {
     submittedAt: property["Submitted At"]?.date?.start || "",
     attachmentCount: property["Attachment Count"]?.number || attachments.length,
     attachments,
+    paymentStatus: property["Payment Status"]?.select?.name || "",
+    paymentId: propertyText(property["Payment ID"]),
+    orderId: propertyText(property["Order ID"]),
+    amountPaid: property["Amount Paid"]?.number ?? null,
   };
 }
 
@@ -219,7 +258,8 @@ export async function listEnquiries() {
     cursor = result.has_more && result.next_cursor ? result.next_cursor : undefined;
   } while (cursor && enquiries.length < 500);
 
-  return enquiries;
+  // Only verified paid Pings are shown. Older unverified rows stay in Notion but are hidden here.
+  return enquiries.filter((enquiry) => enquiry.paymentStatus === "Paid");
 }
 
 export async function updateEnquiryStatus(pageId: string, status: EnquiryStatus) {

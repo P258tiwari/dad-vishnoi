@@ -1,4 +1,3 @@
-import { hasConsultationAccess } from "@/lib/consultation-access";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { hasBotSession } from "@/lib/bot-protection";
 import { boundedRequest } from "@/lib/bounded-request";
@@ -178,7 +177,6 @@ async function googleRequest(url: string, init: RequestInit) {
 }
 
 export async function POST(request: NextRequest) {
-  if (!(await hasConsultationAccess(request))) return NextResponse.json({ ok: false, message: "Please return from the payment page to open the details form." }, { status: 402 });
   if (!hasBotSession(request)) return NextResponse.json({ ok: false, message: "Please complete the security check and try again." }, { status: 403 });
   if (!isTrustedMutation(request)) {
     return NextResponse.json({ ok: false, message: MAPS_UNAVAILABLE_MESSAGE }, { status: 403 });

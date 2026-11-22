@@ -77,4 +77,6 @@ export type DentalLead = {
   source: "Website - Dentist At Door";
   pageUrl: string;
   status: "Active";
+  /** Only Razorpay-verified, captured payments reach storage. */
+  payment: { paymentId: string; orderId: string; amountPaise: number };
 };

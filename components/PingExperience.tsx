@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Check, CheckCircle2, ChevronDown, Crosshair, ExternalLink, FileImage, FileText, FileVideo, Languages, LoaderCircle, MapPin, Mic, Paperclip, Search, Sparkles, Square, Trash2, Upload, UserRound, X } from "lucide-react";
+import { Check, CheckCircle2, ChevronDown, Crosshair, ExternalLink, FileImage, FileText, FileVideo, Languages, LoaderCircle, MapPin, Mic, Paperclip, Search, ShieldCheck, Sparkles, Square, Trash2, Upload, UserRound, X } from "lucide-react";
 import { createContext, FormEvent, ReactNode, useCallback, useContext, useEffect, useId, useRef, useState } from "react";
 import { trackEvent } from "@/lib/analytics";
 import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
@@ -183,6 +183,26 @@ function formatCompleteAddress(values: FormValues) {
     .join(", ");
 }
 
+type PaymentProof = { orderId: string; paymentId: string; signature: string };
+
+let checkoutScript: Promise<void> | undefined;
+function loadRazorpayCheckout() {
+  if (window.Razorpay) return Promise.resolve();
+  checkoutScript ??= new Promise<void>((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => {
+      script.remove();
+      checkoutScript = undefined;
+      reject(new Error("Payment could not load. Check your connection and try again."));
+    };
+    document.head.append(script);
+  });
+  return checkoutScript;
+}
+
 function fileTypeIcon(file: File) {
   if (file.type.startsWith("image/")) return <FileImage size={16} />;
   if (file.type.startsWith("video/")) return <FileVideo size={16} />;
@@ -193,7 +213,7 @@ function fileTypeIcon(file: File) {
 export function PingPageForm() {
   const titleId = useId();
   const router = useRouter();
-  return <div className="ping-page-panel"><LeadForm titleId={titleId} source="manual_payment_review" onDone={() => router.push("/")} onSubmittingChange={() => {}} /></div>;
+  return <div className="ping-page-panel"><LeadForm titleId={titleId} source="ping_page" onDone={() => router.push("/")} onSubmittingChange={() => {}} /></div>;
 }
 
 function LeadForm({
@@ -214,7 +234,9 @@ function LeadForm({
   const [serverError, setServerError] = useState("");
   const [requestId, setRequestId] = useState("");
   const [duplicateSubmission, setDuplicateSubmission] = useState(false);
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
+  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
+  const [payment, setPayment] = useState<PaymentProof | null>(null);
+  const [paying, setPaying] = useState(false);
   const [showAddressLine2, setShowAddressLine2] = useState(false);
   const [addressQuery, setAddressQuery] = useState("");
   const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
@@ -652,25 +674,83 @@ function LeadForm({
     }
   };
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (status === "submitting") return;
-    setServerError("");
+  const buildPayload = () => ({
+    ...values,
+    address: formatCompleteAddress(values),
+    landmark: values.addressLine2,
+    summaryEnglish,
+    summaryHindi,
+    startedAt,
+    pageUrl: pageUrlWithCampaignAttribution(),
+  });
 
-    const completeAddress = formatCompleteAddress(values);
-    const payload = { ...values, address: completeAddress, landmark: values.addressLine2, summaryEnglish, summaryHindi, startedAt, pageUrl: pageUrlWithCampaignAttribution() };
-    const parsed = leadInputSchema.safeParse(payload);
-    if (!parsed.success) {
-      const nextErrors: Record<string, string> = {};
-      for (const issue of parsed.error.issues) {
-        const field = String(issue.path[0] || "form");
-        if (!nextErrors[field]) nextErrors[field] = issue.message;
-      }
-      setErrors(nextErrors);
-      focusFirstError(nextErrors);
-      return;
+  const payloadIsValid = () => {
+    const parsed = leadInputSchema.safeParse(buildPayload());
+    if (parsed.success) return true;
+    const nextErrors: Record<string, string> = {};
+    for (const issue of parsed.error.issues) {
+      const field = String(issue.path[0] || "form");
+      if (!nextErrors[field]) nextErrors[field] = issue.message;
     }
+    setErrors(nextErrors);
+    focusFirstError(nextErrors);
+    return false;
+  };
 
+  // Checkout: open Razorpay on this page so the form and files stay here, then send the Ping once paid.
+  async function payAndSend() {
+    if (paying || status === "submitting") return;
+    setServerError("");
+    if (!payloadIsValid()) return;
+    if (payment) return sendPing(payment);
+
+    setPaying(true);
+    try {
+      const [orderResponse] = await Promise.all([
+        fetchWithTimeout("/api/payments/order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fullName: values.fullName, phone: values.phone }),
+        }),
+        loadRazorpayCheckout(),
+      ]);
+      const order = (await orderResponse.json()) as { ok?: boolean; message?: string; orderId?: string; amount?: number; currency?: string; keyId?: string };
+      if (!orderResponse.ok || !order.ok || !order.orderId || !window.Razorpay) {
+        throw new Error(order.message || "Payment is unavailable right now. Please try again shortly.");
+      }
+      const checkout = new window.Razorpay({
+        key: order.keyId,
+        order_id: order.orderId,
+        amount: order.amount,
+        currency: order.currency,
+        name: "Vishnoi Dental Hospital",
+        description: "Online video consultation",
+        prefill: { name: values.fullName, contact: normalizeIndianPhone(values.phone) },
+        theme: { color: "#21194b" },
+        handler: (response: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }) => {
+          const proof = { orderId: response.razorpay_order_id, paymentId: response.razorpay_payment_id, signature: response.razorpay_signature };
+          setPayment(proof);
+          setPaying(false);
+          trackEvent("ping_payment_success", { source });
+          void sendPing(proof);
+        },
+        modal: { ondismiss: () => setPaying(false) },
+      });
+      checkout.on("payment.failed", (response) => {
+        setServerError(`Payment failed${response.error?.description ? `: ${response.error.description}` : "."} Nothing was sent. Please try again.`);
+        trackEvent("ping_payment_failed", { source });
+      });
+      trackEvent("ping_checkout_open", { source });
+      checkout.open();
+    } catch (error) {
+      setPaying(false);
+      setServerError(error instanceof Error ? error.message : "Payment could not start. Please try again.");
+    }
+  }
+
+  async function sendPing(proof: PaymentProof) {
+    setServerError("");
+    const payload = { ...buildPayload(), payment: proof };
     setStatus("submitting");
     onSubmittingChange(true);
     try {
@@ -732,7 +812,8 @@ function LeadForm({
           </p>
           <p className="success-download-note">You don&apos;t need to download anything right now.</p>
           {requestId ? <p className="success-request-id"><span>Request reference</span><strong>{requestId}</strong></p> : null}
-          {duplicateSubmission ? <p className="success-duplicate-note">A matching Ping was already received recently, so we did not create a second request.</p> : null}
+          {payment ? <p className="success-request-id"><span>₹1,500 paid · Payment ID</span><strong>{payment.paymentId}</strong></p> : null}
+          {duplicateSubmission ? <p className="success-duplicate-note">The Ping for this payment was already received, so we did not create a second request.</p> : null}
           <div className="success-next" aria-label="What happens next">
             <b>What happens next?</b>
             <ol>
@@ -753,26 +834,25 @@ function LeadForm({
         aria-label="Consultation details"
         ref={formRef}
         className="form-grid step-form"
-        onSubmit={(event) => {
-          if (step < 4) {
-            event.preventDefault();
-            if (step < 3) continueToNextStep();
-            else void prepareSummary();
-            return;
-          }
-          submit(event);
+        onSubmit={(event: FormEvent<HTMLFormElement>) => {
+          event.preventDefault();
+          if (step < 3) continueToNextStep();
+          else if (step === 3) void prepareSummary();
+          else if (step === 4) setStep(5);
+          else void payAndSend();
         }}
         onFocus={markStarted}
         noValidate
       >
-        <ol className="ping-stepper" aria-label={`Consultation progress: step ${step} of 4`}>
+        <ol className="ping-stepper" aria-label={`Consultation progress: step ${step} of 5`}>
           {[
             { label: "Details", hint: "About you" },
             { label: "Address", hint: "Your location" },
             { label: "Concern", hint: "How we can help" },
-            { label: "Review", hint: "Check & submit" },
+            { label: "Review", hint: "Check your details" },
+            { label: "Checkout", hint: "Pay & send" },
           ].map(({ label, hint }, index) => {
-            const itemStep = (index + 1) as 1 | 2 | 3 | 4;
+            const itemStep = (index + 1) as 1 | 2 | 3 | 4 | 5;
             return (
               <li key={label} className={step === itemStep ? "is-current" : step > itemStep ? "is-complete" : "is-upcoming"} aria-current={step === itemStep ? "step" : undefined}>
                 <span className="ping-step-number" aria-hidden="true">{step > itemStep ? <Check size={16} strokeWidth={3} /> : `0${itemStep}`}</span>
@@ -784,8 +864,8 @@ function LeadForm({
         </ol>
 
         <div className="step-heading" aria-live="polite">
-          <span>Step {step} of 4</span>
-          <h3>{step === 1 ? "Your details" : step === 2 ? "Your address in India" : step === 3 ? "How can we help?" : "Review your concern"}</h3>
+          <span>Step {step} of 5</span>
+          <h3>{step === 1 ? "Your details" : step === 2 ? "Your address in India" : step === 3 ? "How can we help?" : step === 4 ? "Review your concern" : "Checkout"}</h3>
         </div>
 
         {step === 1 ? (
@@ -1043,7 +1123,7 @@ function LeadForm({
                 <span aria-hidden="true"><Sparkles size={19} /></span>
                 <div>
                   <b>Your dental concern is summarized</b>
-                  <p>Review the summary and switch languages before sending your Ping.</p>
+                  <p>Review the summary and switch languages before checkout.</p>
                 </div>
               </div>
 
@@ -1106,13 +1186,32 @@ function LeadForm({
             </div>
           </div>
         ) : null}
+
+        {step === 5 ? (
+          <div className="step-fields summary-step" aria-live="polite">
+            <section className="summary-detail-section" aria-labelledby="checkout-heading">
+              <div className="summary-detail-heading">
+                <span><ShieldCheck size={17} aria-hidden="true" /><b id="checkout-heading">Online video consultation</b></span>
+              </div>
+              <div className="summary-detail-grid">
+                <div><span>Doctor</span><strong>Dr Manish Vishnoi</strong></div>
+                <div><span>Patient</span><strong>{values.fullName}</strong></div>
+                <div><span>Mobile</span><strong>{values.phone}</strong></div>
+              </div>
+              <div className="checkout-total"><span>Total to pay</span><strong>&#8377;1,500</strong></div>
+            </section>
+            {payment
+              ? <p className="checkout-note is-paid"><CheckCircle2 size={16} aria-hidden="true" /> <span>Payment received (ID {payment.paymentId}). You won&apos;t be charged again.</span></p>
+              : <p className="checkout-note"><ShieldCheck size={16} aria-hidden="true" /> <span>You pay securely through Razorpay. Your Ping is sent to our team only after the payment is confirmed.</span></p>}
+          </div>
+        ) : null}
         <div className="sr-only" aria-hidden="true">
           <label htmlFor="field-website">Website</label>
           <input id="field-website" name="website" tabIndex={-1} autoComplete="off" value={values.website} onChange={(event) => update("website", event.target.value)} />
         </div>
         {serverError ? <div className="form-error" role="alert">{serverError}</div> : null}
         <div className="step-actions">
-          {step > 1 ? <button type="button" className="step-back" onClick={() => setStep((step - 1) as 1 | 2 | 3)}>Back</button> : null}
+          {step > 1 ? <button type="button" className="step-back" disabled={paying || status === "submitting"} onClick={() => setStep((step - 1) as 1 | 2 | 3 | 4)}>Back</button> : null}
           {step < 3 ? (
             <button className="ping-button submit-button step-next continue-button" type="submit" disabled={!canContinue}>Continue</button>
           ) : step === 3 ? (
@@ -1124,10 +1223,12 @@ function LeadForm({
               {summaryStatus === "processing" ? <LoaderCircle className="animate-spin" size={18} /> : <Sparkles size={17} />}
               {summaryStatus === "processing" ? "Creating your summary…" : "Get the summary"}
             </button>
+          ) : step === 4 ? (
+            <button className="ping-button submit-button step-next" type="submit">Continue to checkout</button>
           ) : (
-            <button className="ping-button submit-button step-next" type="submit" disabled={status === "submitting"}>
-              {status === "submitting" ? <LoaderCircle className="animate-spin" size={18} /> : <MapPin size={17} />}
-              {status === "submitting" ? "Sending your ping…" : "Send my ping"}
+            <button className="ping-button submit-button step-next" type="submit" disabled={paying || status === "submitting"}>
+              {paying || status === "submitting" ? <LoaderCircle className="animate-spin" size={18} /> : payment ? <MapPin size={17} /> : <ShieldCheck size={17} />}
+              {status === "submitting" ? "Sending your ping…" : paying ? "Waiting for payment…" : payment ? "Send my details" : "Pay ₹1,500"}
             </button>
           )}
         </div>

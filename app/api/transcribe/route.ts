@@ -1,4 +1,3 @@
-import { hasConsultationAccess } from "@/lib/consultation-access";
 import { hasBotSession } from "@/lib/bot-protection";
 import { boundedRequest } from "@/lib/bounded-request";
 import { NextRequest, NextResponse } from "next/server";
@@ -20,7 +19,6 @@ type SummaryResult = {
 const urduScriptPattern = /[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff]/u;
 
 export async function POST(request: NextRequest) {
-  if (!(await hasConsultationAccess(request))) return NextResponse.json({ ok: false, message: "Please return from the payment page to open the details form." }, { status: 402 });
   if (!hasBotSession(request)) return NextResponse.json({ ok: false, message: "Please complete the security check and try again." }, { status: 403 });
   if (!isTrustedMutation(request)) {
     return NextResponse.json({ ok: false, message: safeError }, { status: 403 });

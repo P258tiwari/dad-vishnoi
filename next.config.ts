@@ -5,13 +5,13 @@ const contentSecurityPolicy = [
   "base-uri 'self'",
   "object-src 'none'",
   "frame-ancestors 'none'",
-  "form-action 'self'",
-  `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "production" ? "" : " 'unsafe-eval'"} https://www.googletagmanager.com https://connect.facebook.net https://challenges.cloudflare.com`,
-  "frame-src https://challenges.cloudflare.com",
+  "form-action 'self' https://api.razorpay.com",
+  `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "production" ? "" : " 'unsafe-eval'"} https://www.googletagmanager.com https://connect.facebook.net https://challenges.cloudflare.com https://checkout.razorpay.com`,
+  "frame-src https://challenges.cloudflare.com https://api.razorpay.com https://checkout.razorpay.com",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https://www.google-analytics.com https://www.facebook.com",
+  "img-src 'self' data: blob: https://www.google-analytics.com https://www.facebook.com https://*.razorpay.com",
   "font-src 'self' data:",
-  "connect-src 'self' https://*.google-analytics.com https://*.analytics.google.com https://www.facebook.com https://connect.facebook.net",
+  "connect-src 'self' https://*.google-analytics.com https://*.analytics.google.com https://www.facebook.com https://connect.facebook.net https://api.razorpay.com https://lumberjack.razorpay.com",
   "media-src 'self' blob: https://prod-files-secure.s3.us-west-2.amazonaws.com",
   "worker-src 'self' blob:",
   "manifest-src 'self'",
@@ -44,6 +44,8 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       { source: "/(.*)", headers: securityHeaders },
+      // Razorpay opens bank/UPI windows that must be able to report back to the checkout.
+      { source: "/ping", headers: [{ key: "Cross-Origin-Opener-Policy", value: "same-origin-allow-popups" }] },
       { source: "/api/:path*", headers: noStoreHeaders },
       { source: "/login", headers: noStoreHeaders },
       { source: "/dashboard", headers: noStoreHeaders },

@@ -4,8 +4,8 @@ A mobile-first Dentist At Door landing page with a Notion-backed Ping enquiry wo
 
 ## Features
 
-- Four-step Ping form with India-only addresses with state selection and current-location autofill, voice transcription, bilingual AI summary review, English/Hindi switching, consent and file attachments
-- Notion-only enquiry storage; new enquiries start as `Active`
+- Five-step Ping form ending in a ₹1,500 Razorpay checkout; the Ping is saved only after the payment is verified with Razorpay. Form includes India-only addresses with state selection and current-location autofill, voice transcription, bilingual AI summary review, English/Hindi switching, consent and file attachments
+- Notion-only enquiry storage; only paid Pings are stored (Payment Status `Paid`, payment ID, order ID, amount). New enquiries start as `Active`
 - Files uploaded directly to the enquiry's Notion `Attachments` property
 - Standalone `/login` page and protected `/dashboard`
 - Search, status filters, full enquiry detail view, attachment links and status updates
@@ -37,6 +37,8 @@ Open the public site at `http://localhost:3000`, the private login at `http://lo
 | `NEXT_PUBLIC_SITE_URL` | Canonical production URL, without a trailing slash |
 | `NOTION_API_KEY` | Secret for the website's internal Notion integration |
 | `NOTION_DATA_SOURCE_ID` | Dentist At Door enquiry data source ID |
+| `RAZORPAY_KEY_ID` | Razorpay API key ID (`rzp_test_` locally, `rzp_live_` in production) |
+| `RAZORPAY_KEY_SECRET` | Razorpay API key secret; verifies payment signatures server-side |
 | `GOOGLE_MAPS_API_KEY` | Server-only key for Places API (New) address search and Geocoding API current-location lookup |
 | `ADMIN_USERNAME` | Username for the single dashboard login |
 | `ADMIN_PASSWORD` | Password for the single dashboard login |
@@ -96,4 +98,4 @@ npm run typecheck
 npm run build
 ```
 
-Before launch, submit a real Ping with and without files, confirm the row and attachments in Notion, verify each dashboard status transition, and replace all legal/contact placeholders.
+Before launch, pay and submit a real Ping with and without files (test keys first), confirm the payment shows as captured in Razorpay, confirm the row and attachments in Notion, verify each dashboard status transition, and replace all legal/contact placeholders.

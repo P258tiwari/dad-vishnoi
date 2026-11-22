@@ -9,14 +9,14 @@
 - Zod updated to 4.6.6 or newer; npm installation audit and production audit report zero vulnerabilities.
 - Local production HTTP checks passed for homepage, legal pages, login, sitemap, robots and the latest doctor image.
 - Dashboard redirects unauthenticated requests to login.
-- First-time Ping visits redirect to the hosted Razorpay page. Returning users with the manual-review cookie can reopen the form without another payment redirect.
+- Ping opens the form directly. Step 5 is a Razorpay Checkout for ₹1,500; the server verifies the signature and captured amount with Razorpay before saving to Notion. Unpaid or failed attempts are never stored.
 - All four enquiry-related APIs rejected unverified requests with HTTP 403.
 
 ## Changes made
 
 - Replaced internal window navigation with Next.js router navigation.
 - Fixed repeat-payment redirect for returning visitors.
-- Added Razorpay URL validation to production startup checks.
+- Production startup checks require live Razorpay API keys.
 - Ignored all environment files except the example in Git.
 - Aligned service descriptions in privacy and terms pages with video consultation and in-person treatment in Kanpur, using the supplied FAQ terms.
 - Added `npm run test:security`.
@@ -25,9 +25,9 @@
 
 Read-only checks against https://vishnoi.doctorsatdoor.com found HTTP 200 for public pages, robots, sitemap and login; dashboard redirected to login. **/ping returned HTTP 404.** These local changes have not been deployed in this audit.
 
-Deploy the updated build using the existing VPS procedure in README.md, then repeat checks against the public hostname. Verify the hosted Razorpay page charges ₹1,500 and its return destination is `/api/consultation/return` or `/ping?status=success` on the canonical hostname.
+Deploy the updated build using the existing VPS procedure in README.md, then repeat checks against the public hostname. Make one live ₹1,500 payment, confirm it is captured in Razorpay and appears as Paid in the dashboard. The old hosted Payment Page and its success URL are no longer used.
 
-Payment access remains a deliberately unverified manual-review flow. The return flag/cookie is not proof of payment. The team must verify the Razorpay receipt before confirming a slot; automatic verification requires a separate signed payment integration.
+Payments are verified server-side: only Razorpay-signed, captured ₹1,500 payments create a Notion record, and each payment creates at most one record.
 
 Still required: normal-browser Turnstile verification; desktop/mobile visual checks in both languages; a real payment and clearly labelled enquiry with attachment; confirmation of storage in Notion and dashboard status updates. No payment was made, no live enquiry submitted, and no external service credentials were functionally validated by this audit.
 

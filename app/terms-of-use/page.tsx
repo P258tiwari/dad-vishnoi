@@ -27,7 +27,7 @@ export default function TermsPage() {
 
       <h2>Pricing and changes</h2>
       <p>The online video consultation fee is ₹1,500. Tests, investigations, medicines, dental procedures and other treatments are not included. If you proceed with the recommended treatment with Dr. Manish Vishnoi, the consultation fee will be adjusted against treatment charges, as applicable.</p>
-      <p>After payment, the team checks the receipt and confirms your consultation time slot. Payment does not provide immediate or anytime access to the doctor. Consultation advice is valid for 15 days from the consultation date; a fresh consultation may be required after that depending on your condition. Contact the team for cancellation or rescheduling requests.</p>
+      <p>After your payment is confirmed, the team contacts you to confirm your consultation time slot. Payment does not provide immediate or anytime access to the doctor. Consultation advice is valid for 15 days from the consultation date; a fresh consultation may be required after that depending on your condition. Contact the team for cancellation or rescheduling requests.</p>
 
       <h2>Technology and privacy</h2>
       <p>The service may use hosting, Notion, OpenAI and analytics providers. Their systems may occasionally be unavailable. Personal information is handled under our Privacy Policy.</p>

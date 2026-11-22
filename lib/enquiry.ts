@@ -36,4 +36,8 @@ export type DashboardEnquiry = {
   submittedAt: string;
   attachmentCount: number;
   attachments: EnquiryFile[];
+  paymentStatus: string;
+  paymentId: string;
+  orderId: string;
+  amountPaid: number | null;
 };

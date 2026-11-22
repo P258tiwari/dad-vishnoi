@@ -1,7 +1,7 @@
 import { ensureBotCheck, resetBotCheck } from "./bot-check-client";
 
 export async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 30_000) {
-  const protectedRequest = typeof input === "string" && ["/api/leads", "/api/summary", "/api/transcribe", "/api/location"].includes(input);
+  const protectedRequest = typeof input === "string" && ["/api/leads", "/api/summary", "/api/transcribe", "/api/location", "/api/payments/order"].includes(input);
   if (protectedRequest) await ensureBotCheck();
   const controller = new AbortController();
   let timedOut = false;

@@ -6,6 +6,7 @@ const ts = require('typescript');
 const { NextRequest } = require('next/server');
 const cache = new Map();
 let saved = 0;
+let lastLead;
 function load(file) {
   file = path.resolve(file);
   if (cache.has(file)) return cache.get(file).exports;
@@ -13,7 +14,7 @@ function load(file) {
   const source = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const req = (name) => {
     if (name === 'server-only') return {};
-    if (name === '@/lib/notion-leads') return { saveLeadToNotion: async () => { saved++; } };
+    if (name === '@/lib/notion-leads') return { saveLeadToNotion: async (lead) => { saved++; lastLead = lead; return { leadId: lead.leadId, duplicate: false }; } };
     if (name.startsWith('@/')) return load(name.slice(2) + '.ts');
     if (name.startsWith('.')) return load(path.resolve(path.dirname(file), name) + '.ts');
     return require(name);
@@ -39,7 +40,7 @@ function load(file) {
   const bot = load('lib/bot-protection.ts');
   assert.equal(bot.hasBotSession(request('/api/leads', {})), false);
   const token = bot.createBotSession(request('/api/leads', {}));
-  const cookie = { cookie: `${bot.BOT_COOKIE}=${token}; dad_manual_payment_return=manual-review` };
+  const cookie = { cookie: `${bot.BOT_COOKIE}=${token}` };
   assert.equal(bot.hasBotSession(request('/api/leads', {}, cookie)), true);
   assert.equal(bot.hasBotSession(request('/api/leads', {}, { cookie: `${bot.BOT_COOKIE}=${token}x` })), false);
   assert.equal(bot.hasBotSession(request('/api/leads', {}, { ...cookie, 'x-forwarded-for': '192.0.2.11' })), false);
@@ -65,29 +66,44 @@ function load(file) {
   assert.equal(await isSupportedUpload(new File([Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a])], 'test.png', { type: 'image/png' })), true);
   const leads = load('app/api/leads/route.ts');
   const input = { fullName: 'Security Test', phone: '9000000001', whatsapp: '9000000001', address: 'Test address only', city: 'Kanpur', state: 'Uttar Pradesh', country: 'IN', pincode: '208012', concern: 'Test only', consent: true, website: '', startedAt: Date.now() - 10_000 };
-  assert.equal((await leads.POST(request('/api/leads', input))).status, 402);
-  assert.equal((await leads.POST(request('/api/leads', input, { cookie: 'dad_manual_payment_return=manual-review' }))).status, 403);
-  const access = load('lib/consultation-access.ts');
-  assert.equal(await access.hasConsultationAccess(request('/ping', {})), false);
-  assert.equal(await access.hasConsultationAccess(request('/ping', {}, cookie)), true);
-  const returned = load('app/api/consultation/return/route.ts').GET(new NextRequest(origin + '/api/consultation/return'));
-  assert.equal(returned.status, 303);
-  assert.equal(returned.headers.get('location'), origin + '/ping?status=success');
-  assert.match(returned.headers.get('set-cookie'), /dad_manual_payment_return=manual-review/);
-  assert.match(returned.headers.get('set-cookie'), /HttpOnly/i);
+  // Razorpay: the fee is fixed on the server, and only a signed, captured ₹1,500 payment is ever saved.
+  process.env.RAZORPAY_KEY_ID = 'rzp_test_onlyforthis';
+  process.env.RAZORPAY_KEY_SECRET = 'test-only-razorpay-secret';
+  const { createHmac } = require('node:crypto');
+  const paid = (paymentId, signature) => ({ orderId: 'order_TEST000001', paymentId,
+    signature: signature || createHmac('sha256', process.env.RAZORPAY_KEY_SECRET).update(`order_TEST000001|${paymentId}`).digest('hex') });
+  const razorpayPayment = (overrides = {}) => async (url) => Response.json({ id: String(url).split('/').pop(), order_id: 'order_TEST000001', amount: 150000, currency: 'INR', status: 'captured', ...overrides });
+  const orders = load('app/api/payments/order/route.ts');
+  assert.equal((await orders.POST(request('/api/payments/order', { fullName: 'Security Test', phone: '9000000001' }))).status, 403);
+  let orderBody;
+  global.fetch = async (url, init) => { orderBody = JSON.parse(init.body); return Response.json({ id: 'order_TEST000001', amount: 150000, currency: 'INR' }); };
+  const orderResponse = await orders.POST(request('/api/payments/order', { fullName: 'Security Test', phone: '9000000001', amount: 1 }, cookie));
+  assert.equal(orderResponse.status, 200);
+  assert.equal(orderBody.amount, 150000);
+  assert.equal((await orderResponse.json()).keyId, 'rzp_test_onlyforthis');
+  assert.equal((await leads.POST(request('/api/leads', { ...input, payment: paid('pay_TEST000001') }))).status, 403);
+  assert.equal((await leads.POST(request('/api/leads', input, cookie))).status, 402);
+  global.fetch = async () => { throw new Error('A forged signature must not reach Razorpay'); };
+  assert.equal((await leads.POST(request('/api/leads', { ...input, payment: paid('pay_TEST000002', 'a'.repeat(64)) }, cookie))).status, 402);
+  global.fetch = razorpayPayment({ amount: 100 });
+  assert.equal((await leads.POST(request('/api/leads', { ...input, payment: paid('pay_TEST000003') }, cookie))).status, 402);
+  global.fetch = razorpayPayment({ status: 'failed' });
+  assert.equal((await leads.POST(request('/api/leads', { ...input, payment: paid('pay_TEST000004') }, cookie))).status, 402);
   assert.equal(saved, 0);
-  assert.equal((await leads.POST(request('/api/leads', { ...input, website: 'spam.example' }, cookie))).status, 200);
-  assert.equal(saved, 0);
-  assert.equal((await leads.POST(request('/api/leads', { ...input, country: 'US' }, cookie))).status, 400);
-  assert.equal((await leads.POST(request('/api/leads', input, cookie))).status, 201);
+  globalThis.dentalRateLimits.clear();
+  assert.equal((await leads.POST(request('/api/leads', { ...input, country: 'US', payment: paid('pay_TEST000005') }, cookie))).status, 400);
+  global.fetch = razorpayPayment();
+  assert.equal((await leads.POST(request('/api/leads', { ...input, website: 'autofill.example', payment: paid('pay_TEST000006') }, cookie))).status, 201);
   assert.equal(saved, 1);
-  assert.equal((await leads.POST(request('/api/leads', input, cookie))).status, 200);
+  assert.deepEqual(lastLead.payment, { paymentId: 'pay_TEST000006', orderId: 'order_TEST000001', amountPaise: 150000 });
+  assert.equal((await leads.POST(request('/api/leads', { ...input, payment: paid('pay_TEST000006') }, cookie))).status, 409);
   assert.equal(saved, 1);
+  global.fetch = realFetch;
   for (const name of ['location', 'summary', 'transcribe']) {
-    assert.equal((await load(`app/api/${name}/route.ts`).POST(request(`/api/${name}`, {}))).status, 402);
+    assert.equal((await load(`app/api/${name}/route.ts`).POST(request(`/api/${name}`, {}))).status, 403);
   }
   const { checkRateLimit } = load('lib/rate-limit.ts');
   assert.equal(checkRateLimit('test-limit', 1), true);
   assert.equal(checkRateLimit('test-limit', 1), false);
-  console.log('PASS: origins, forged/expired/IP-bound sessions, hostname/action checks, upstream failure, body limits, file signatures, bot blocking, honeypot, India validation, duplicate suppression and rate limits. No live records or external API calls.');
+  console.log('PASS: Razorpay signature/amount/status checks, one Ping per payment, server-fixed fee, origins, forged/expired/IP-bound sessions, hostname/action checks, upstream failure, body limits, file signatures, bot blocking, India validation, duplicate suppression and rate limits. No live records or external API calls.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
