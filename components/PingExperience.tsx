@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Check, CheckCircle2, ChevronDown, Crosshair, ExternalLink, FileImage, FileText, FileVideo, Languages, LoaderCircle, MapPin, Mic, Paperclip, Search, ShieldCheck, Sparkles, Square, Trash2, Upload, UserRound, X } from "lucide-react";
-import { createContext, FormEvent, ReactNode, useCallback, useContext, useEffect, useId, useRef, useState } from "react";
+import { createContext, FormEvent, ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { trackEvent } from "@/lib/analytics";
 import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 import { leadInputSchema, normalizeIndianPhone } from "@/lib/lead-schema";
@@ -211,29 +211,22 @@ function fileTypeIcon(file: File) {
 }
 
 export function PingPageForm() {
-  const titleId = useId();
-  const router = useRouter();
-  return <div className="ping-page-panel"><LeadForm titleId={titleId} source="ping_page" onDone={() => router.push("/")} onSubmittingChange={() => {}} /></div>;
+  return <div className="ping-page-panel"><LeadForm source="ping_page" onSubmittingChange={() => {}} /></div>;
 }
 
 function LeadForm({
-  titleId,
   source,
-  onDone,
   onSubmittingChange,
 }: {
-  titleId: string;
   source: string;
-  onDone: () => void;
   onSubmittingChange: (submitting: boolean) => void;
 }) {
+  const router = useRouter();
   const [values, setValues] = useState<FormValues>(initialValues);
   const [sameNumber, setSameNumber] = useState(true);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [status, setStatus] = useState<"idle" | "submitting" | "success">("idle");
+  const [status, setStatus] = useState<"idle" | "submitting">("idle");
   const [serverError, setServerError] = useState("");
-  const [requestId, setRequestId] = useState("");
-  const [duplicateSubmission, setDuplicateSubmission] = useState(false);
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
   const [payment, setPayment] = useState<PaymentProof | null>(null);
   const [paying, setPaying] = useState(false);
@@ -767,11 +760,11 @@ function LeadForm({
         }
         throw new Error(result.message || "We couldn't submit your request right now. Please try again.");
       }
-      setRequestId(result.leadId || "");
-      setDuplicateSubmission(Boolean(result.duplicate));
-      setStatus("success");
-      onSubmittingChange(false);
       trackEvent(result.duplicate ? "ping_submit_duplicate" : "ping_submit_success", { source });
+      // Stay in "submitting" so the button stays disabled while the thank-you page loads.
+      const thankYou = new URLSearchParams({ ref: result.leadId || "", payment: proof.paymentId });
+      if (result.duplicate) thankYou.set("duplicate", "1");
+      router.replace(`/ping/thank-you?${thankYou}`);
     } catch (error) {
       setStatus("idle");
       onSubmittingChange(false);
@@ -800,33 +793,6 @@ function LeadForm({
     : step === 2
       ? values.address.trim().length >= 5 && values.city.trim().length >= 2 && /^\d{6}$/.test(values.pincode) && pincodeIsEligible && isIndianState(values.state)
       : true;
-
-  if (status === "success") {
-    return (
-      <div className="success-wrap" aria-live="polite">
-        <div>
-          <span className="success-icon"><Check size={30} aria-hidden="true" /></span>
-          <h2 id={titleId} className="text-3xl font-extrabold tracking-[-0.04em]">Thank you! Ping received <span aria-hidden="true">✓</span></h2>
-          <p className="mx-auto mt-3 max-w-md leading-7 text-ink-soft">
-            Your request has been shared with the Vishnoi Dental Hospital coordination team. They will contact you to understand your requirement and coordinate the next step.
-          </p>
-          <p className="success-download-note">You don&apos;t need to download anything right now.</p>
-          {requestId ? <p className="success-request-id"><span>Request reference</span><strong>{requestId}</strong></p> : null}
-          {payment ? <p className="success-request-id"><span>₹1,500 paid · Payment ID</span><strong>{payment.paymentId}</strong></p> : null}
-          {duplicateSubmission ? <p className="success-duplicate-note">The Ping for this payment was already received, so we did not create a second request.</p> : null}
-          <div className="success-next" aria-label="What happens next">
-            <b>What happens next?</b>
-            <ol>
-              <li>Request reviewed</li>
-              <li>Hospital team contacts you</li>
-              <li>Next step confirmed</li>
-            </ol>
-          </div>
-          <button type="button" className="ping-button mt-7 min-w-32" onClick={onDone}>Done</button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <>
